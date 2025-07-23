@@ -281,6 +281,41 @@ Here's how to configure different models:
 
 _Note: The model must be supported in Stagehand. Check out the docs [here](https://docs.stagehand.dev/examples/custom_llms#supported-llms). When using any custom model, you must provide your own API key for that provider._
 
+## Cloud Deployment
+
+### Automated Deployment with Google Cloud Build
+
+For production deployments, this repository includes automated Google Cloud Run deployment using Cloud Build. This approach provides secure environment variable handling without committing secrets to your repository.
+
+#### Quick Deploy
+
+```bash
+# Deploy to Google Cloud Run with Cloud Build
+gcloud builds submit --config cloudbuild.yaml \
+  --substitutions=_BROWSERBASE_PROJECT_ID="your-project-id",_GEMINI_API_KEY="your-gemini-key",_BROWSERBASE_API_KEY="your-browserbase-key"
+```
+
+#### Setup CI/CD Pipeline
+
+```bash
+# Create automated trigger for your GitHub repository
+gcloud builds triggers create github \
+  --repo-name mcp-server-browserbase \
+  --repo-owner your-github-username \
+  --branch-pattern "^main$" \
+  --build-config cloudbuild.yaml \
+  --substitutions _BROWSERBASE_PROJECT_ID="your-project-id",_GEMINI_API_KEY="your-gemini-key",_BROWSERBASE_API_KEY="your-browserbase-key"
+```
+
+**Benefits:**
+
+- 🔒 **Secure**: API keys never stored in repository
+- 🚀 **Serverless**: Scales automatically with Cloud Run
+- ⚡ **Fast**: Optimized container builds and deployments
+- 🔄 **Automated**: Integrates with Git workflows
+
+See `CLOUDRUN.md` for detailed deployment instructions and `DOCKER.md` for containerization options.
+
 ### Resources
 
 The server provides access to screenshot resources:
