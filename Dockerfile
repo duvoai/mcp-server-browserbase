@@ -22,5 +22,8 @@ RUN pnpm prune --prod --ignore-scripts
 # Expose port for SHTTP transport (optional)
 EXPOSE 3000
 
-# Set default entrypoint to run the MCP server
-CMD ["./cli.js", "--port", "3000", "--host", "0.0.0.0"]
+# Set default entrypoint to run the MCP server with flexible arguments
+# Default values: --port 3000 --host 0.0.0.0
+# Users can override these or add additional flags when running the container
+ENTRYPOINT ["./cli.js"]
+CMD ["--port", "3000", "--host", "0.0.0.0"]
