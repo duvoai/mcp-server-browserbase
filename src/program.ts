@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 
 import createServerFunction from "./index.js";
 import { ServerList } from "./server.js";
-import { startHttpTransport, startStdioTransport } from "./transport.js";
+import { startHttpTransport } from "./transport.js";
 import * as stagehandStore from "./stagehandStore.js";
 
 import { resolveConfig } from "./config.js";
@@ -67,16 +67,30 @@ program
   )
   .action(async (options) => {
     const config = await resolveConfig(options);
-    const serverList = new ServerList(async () =>
-      createServerFunction({
-        config: config,
-      }),
-    );
-    setupExitWatchdog(serverList);
 
-    if (options.port)
-      startHttpTransport(+options.port, options.host, serverList);
-    else await startStdioTransport(serverList, config);
+    if (!options.port) {
+      console.error(
+        `[Program] Error: HTTP port is required. Use --port <port> to specify.`,
+      );
+      process.exit(1);
+    }
+
+    console.log(
+      `[Program] Starting Browserbase MCP server in HTTP mode on port ${options.port}`,
+    );
+
+    const serverList = new ServerList(async (mcpSessionId?: string) => {
+      console.log(
+        `[Program] Creating server instance for session: ${mcpSessionId || "default"}`,
+      );
+      return createServerFunction({
+        config: config,
+        mcpSessionId: mcpSessionId,
+      });
+    });
+
+    setupExitWatchdog(serverList);
+    startHttpTransport(+options.port, options.host, serverList);
   });
 
 function setupExitWatchdog(serverList: ServerList) {
