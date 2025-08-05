@@ -3,56 +3,68 @@ import assert from "node:assert";
 import crypto from "node:crypto";
 
 import { ServerList } from "./server.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { Config } from "../config.d.ts";
 
-export async function startStdioTransport(
-  serverList: ServerList,
-  config?: Config,
-) {
-  // Check if we're using the default model without an API key
-  if (config) {
-    const modelName = config.modelName || "google/gemini-2.0-flash";
-    const hasModelApiKey = config.modelApiKey || process.env.GEMINI_API_KEY;
-
-    if (modelName.includes("gemini") && !hasModelApiKey) {
-      console.error(`Need to set GEMINI_API_KEY in your environment variables`);
-    }
-  }
-
-  const server = await serverList.create();
-  await server.connect(new StdioServerTransport());
+// Track both transport and session context
+interface TransportSession {
+  transport: StreamableHTTPServerTransport;
+  mcpSessionId: string;
 }
 
 async function handleStreamable(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   serverList: ServerList,
-  sessions: Map<string, StreamableHTTPServerTransport>,
+  sessions: Map<string, TransportSession>,
 ) {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
   if (sessionId) {
-    const transport = sessions.get(sessionId);
-    if (!transport) {
+    console.log(
+      `[Transport] Received request with mcp-session-id: ${sessionId}`,
+    );
+    const session = sessions.get(sessionId);
+    if (!session) {
+      console.error(`[Transport] Session not found for ID: ${sessionId}`);
       res.statusCode = 404;
       res.end("Session not found");
       return;
     }
-    return await transport.handleRequest(req, res);
+    console.log(
+      `[Transport] Routing request to existing session: ${sessionId} (MCP: ${session.mcpSessionId})`,
+    );
+    return await session.transport.handleRequest(req, res);
   }
 
   if (req.method === "POST") {
+    const mcpSessionId = crypto.randomUUID();
+    console.log(`[Transport] Creating new MCP session: ${mcpSessionId}`);
+
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => crypto.randomUUID(),
+      sessionIdGenerator: () => mcpSessionId,
       onsessioninitialized: (sessionId) => {
-        sessions.set(sessionId, transport);
+        console.log(
+          `[Transport] Session initialized - Transport ID: ${sessionId}, MCP ID: ${mcpSessionId}`,
+        );
+        sessions.set(sessionId, { transport, mcpSessionId });
       },
     });
+
     transport.onclose = () => {
-      if (transport.sessionId) sessions.delete(transport.sessionId);
+      if (transport.sessionId) {
+        console.log(`[Transport] Closing session: ${transport.sessionId}`);
+        const session = sessions.get(transport.sessionId);
+        if (session) {
+          console.log(
+            `[Transport] Cleaning up MCP session: ${session.mcpSessionId}`,
+          );
+        }
+        sessions.delete(transport.sessionId);
+      }
     };
-    const server = await serverList.create();
+
+    // Pass MCP session ID to server creation
+    console.log(`[Transport] Creating server for MCP session: ${mcpSessionId}`);
+    const server = await serverList.create(mcpSessionId);
     await server.connect(transport);
     return await transport.handleRequest(req, res);
   }
@@ -66,7 +78,10 @@ export function startHttpTransport(
   hostname: string | undefined,
   serverList: ServerList,
 ) {
-  const streamableSessions = new Map<string, StreamableHTTPServerTransport>();
+  console.log(
+    `[Transport] Starting HTTP transport on ${hostname || "localhost"}:${port}`,
+  );
+  const streamableSessions = new Map<string, TransportSession>();
   const httpServer = http.createServer(async (req, res) => {
     if (!req.url) {
       res.statusCode = 400;

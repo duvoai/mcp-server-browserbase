@@ -7,21 +7,18 @@ import type { BrowserSession } from "./types/types.js";
 // Global state for managing browser sessions
 const browsers = new Map<string, BrowserSession>();
 
-// Keep track of the default session explicitly
-let defaultBrowserSession: BrowserSession | null = null;
+// Keep track of the active session ID per context
+let activeSessionId: string | null = null;
 
-// Define a specific ID for the default session
-export const defaultSessionId = `browserbase_session_main_${Date.now()}`;
-
-// Keep track of the active session ID. Defaults to the main session.
-let activeSessionId: string = defaultSessionId;
+console.log(`[SessionManager] Initialized session manager`);
 
 /**
  * Sets the active session ID.
  * @param id The ID of the session to set as active.
  */
 export function setActiveSessionId(id: string): void {
-  if (browsers.has(id) || id === defaultSessionId) {
+  console.log(`[SessionManager] Setting active session ID: ${id}`);
+  if (browsers.has(id)) {
     activeSessionId = id;
   } else {
     process.stderr.write(
@@ -34,7 +31,7 @@ export function setActiveSessionId(id: string): void {
  * Gets the active session ID.
  * @returns The active session ID.
  */
-export function getActiveSessionId(): string {
+export function getActiveSessionId(): string | null {
   return activeSessionId;
 }
 
@@ -114,22 +111,14 @@ export async function createNewBrowserSession(
 
     // Set up disconnect handler
     browser.on("disconnected", () => {
-      process.stderr.write(`[SessionManager] Disconnected: ${newSessionId}\n`);
+      console.log(`[SessionManager] Browser disconnected: ${newSessionId}`);
       browsers.delete(newSessionId);
-      if (defaultBrowserSession && defaultBrowserSession.browser === browser) {
-        process.stderr.write(
-          `[SessionManager] Disconnected (default): ${newSessionId}\n`,
+
+      if (activeSessionId === newSessionId) {
+        console.log(
+          `[SessionManager] Active session disconnected: ${newSessionId}`,
         );
-        defaultBrowserSession = null;
-      }
-      if (
-        activeSessionId === newSessionId &&
-        newSessionId !== defaultSessionId
-      ) {
-        process.stderr.write(
-          `[SessionManager] WARN - Active session disconnected, resetting to default: ${newSessionId}\n`,
-        );
-        setActiveSessionId(defaultSessionId);
+        activeSessionId = null;
       }
     });
 
@@ -154,14 +143,8 @@ export async function createNewBrowserSession(
 
     browsers.set(newSessionId, sessionObj);
 
-    if (newSessionId === defaultSessionId) {
-      defaultBrowserSession = sessionObj;
-    }
-
+    console.log(`[SessionManager] Session created: ${newSessionId}`);
     setActiveSessionId(newSessionId);
-    process.stderr.write(
-      `[SessionManager] Session created and active: ${newSessionId}\n`,
-    );
 
     return sessionObj;
   } catch (creationError) {
@@ -202,7 +185,8 @@ async function closeBrowserGracefully(
   }
 }
 
-// Internal function to ensure default session
+// Removed ensureDefaultSessionInternal - all sessions are treated equally now
+/*
 export async function ensureDefaultSessionInternal(
   config: Config,
 ): Promise<BrowserSession> {
@@ -267,6 +251,7 @@ export async function ensureDefaultSessionInternal(
   setActiveSessionId(sessionId); // Ensure default is marked active
   return defaultBrowserSession!; // Non-null assertion: logic ensures it's not null here
 }
+*/
 
 // Get a specific session by ID
 export async function getSession(
@@ -274,48 +259,49 @@ export async function getSession(
   config: Config,
   createIfMissing: boolean = true,
 ): Promise<BrowserSession | null> {
-  if (sessionId === defaultSessionId && createIfMissing) {
-    try {
-      return await ensureDefaultSessionInternal(config);
-    } catch {
-      process.stderr.write(
-        `[SessionManager] Failed to get default session due to error in ensureDefaultSessionInternal for ${sessionId}. See previous messages for details.\n`,
-      );
-      return null; // Or rethrow if getSession failing for default is critical
-    }
-  }
+  console.log(
+    `[SessionManager] Getting session: ${sessionId}, createIfMissing: ${createIfMissing}`,
+  );
 
-  // For non-default sessions
-  process.stderr.write(`[SessionManager] Getting session: ${sessionId}\n`);
+  // Check if session exists
   const sessionObj = browsers.get(sessionId);
 
-  if (!sessionObj) {
-    process.stderr.write(
-      `[SessionManager] WARN - Session not found in map: ${sessionId}\n`,
-    );
-    return null;
-  }
-
-  // Validate the found session
-  if (!sessionObj.browser.isConnected() || sessionObj.page.isClosed()) {
-    process.stderr.write(
-      `[SessionManager] WARN - Found session ${sessionId} is stale, removing.\n`,
-    );
-    await closeBrowserGracefully(sessionObj, sessionId);
-    browsers.delete(sessionId);
-    if (activeSessionId === sessionId) {
-      process.stderr.write(
-        `[SessionManager] WARN - Invalidated active session ${sessionId}, resetting to default.\n`,
+  if (sessionObj) {
+    // Validate the found session
+    if (!sessionObj.browser.isConnected() || sessionObj.page.isClosed()) {
+      console.log(
+        `[SessionManager] Found stale session ${sessionId}, removing`,
       );
-      setActiveSessionId(defaultSessionId);
+      await closeBrowserGracefully(sessionObj, sessionId);
+      browsers.delete(sessionId);
+
+      if (activeSessionId === sessionId) {
+        console.log(`[SessionManager] Invalidated active session ${sessionId}`);
+        activeSessionId = null;
+      }
+
+      // Fall through to create new session if needed
+    } else {
+      // Session is valid
+      console.log(
+        `[SessionManager] Using existing valid session: ${sessionId}`,
+      );
+      setActiveSessionId(sessionId);
+      return sessionObj;
     }
+  }
+
+  // Session doesn't exist or was stale
+  if (!createIfMissing) {
+    console.log(
+      `[SessionManager] Session not found and createIfMissing=false: ${sessionId}`,
+    );
     return null;
   }
 
-  // Session appears valid, make it active
-  setActiveSessionId(sessionId);
-  process.stderr.write(`[SessionManager] Using valid session: ${sessionId}\n`);
-  return sessionObj;
+  // Create new session
+  console.log(`[SessionManager] Creating new session: ${sessionId}`);
+  return await createNewBrowserSession(sessionId, config);
 }
 
 /**
@@ -335,17 +321,10 @@ export async function cleanupSession(sessionId: string): Promise<void> {
   // Remove from browsers map
   browsers.delete(sessionId);
 
-  // Clear default session reference if this was the default
-  if (sessionId === defaultSessionId && defaultBrowserSession) {
-    defaultBrowserSession = null;
-  }
-
-  // Reset active session to default if this was the active one
+  // Clear active session if this was the active one
   if (activeSessionId === sessionId) {
-    process.stderr.write(
-      `[SessionManager] Cleaned up active session ${sessionId}, resetting to default.\n`,
-    );
-    setActiveSessionId(defaultSessionId);
+    console.log(`[SessionManager] Cleaned up active session ${sessionId}`);
+    activeSessionId = null;
   }
 }
 
@@ -370,7 +349,29 @@ export async function closeAllSessions(): Promise<void> {
   }
 
   browsers.clear();
-  defaultBrowserSession = null;
-  setActiveSessionId(defaultSessionId); // Reset active session to default
-  process.stderr.write(`[SessionManager] All sessions closed and cleared.\n`);
+  activeSessionId = null; // No active session after closing all
+  console.log(`[SessionManager] All sessions closed and cleared`);
+}
+
+/**
+ * Closes a browser session and removes it from the session manager.
+ * @param sessionId The ID of the session to close.
+ */
+export async function closeSession(sessionId: string): Promise<void> {
+  console.log(`[SessionManager] Closing session: ${sessionId}`);
+
+  const session = browsers.get(sessionId);
+  if (session) {
+    await closeBrowserGracefully(session, sessionId);
+    browsers.delete(sessionId);
+
+    if (activeSessionId === sessionId) {
+      console.log(
+        `[SessionManager] Closed active session, clearing active session ID`,
+      );
+      activeSessionId = null;
+    }
+  } else {
+    console.log(`[SessionManager] Session not found for closing: ${sessionId}`);
+  }
 }

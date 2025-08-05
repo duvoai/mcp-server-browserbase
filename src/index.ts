@@ -115,13 +115,25 @@ export const configSchema = z
   );
 
 // Default function for Smithery
-export default function ({ config }: { config: z.infer<typeof configSchema> }) {
+export default function ({
+  config,
+  mcpSessionId,
+}: {
+  config: z.infer<typeof configSchema>;
+  mcpSessionId?: string;
+}) {
   if (!config.browserbaseApiKey) {
     throw new Error("browserbaseApiKey is required");
   }
   if (!config.browserbaseProjectId) {
     throw new Error("browserbaseProjectId is required");
   }
+
+  if (!mcpSessionId) {
+    throw new Error("mcpSessionId is required for HTTP mode");
+  }
+
+  console.log(`[Index] Creating server with session ID: ${mcpSessionId}`);
 
   const server = new McpServer({
     name: "Browserbase MCP Server",
@@ -142,8 +154,8 @@ export default function ({ config }: { config: z.infer<typeof configSchema> }) {
 
   const internalConfig: Config = config as Config;
 
-  // Create the context, passing server instance and config
-  const context = new Context(server.server, internalConfig);
+  // Create context with session ID
+  const context = new Context(server.server, internalConfig, mcpSessionId);
 
   server.server.registerCapabilities({
     resources: {

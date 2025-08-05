@@ -64,16 +64,21 @@ function createMultiSessionAwareTool<TInput extends InputType>(
         throw new Error(`Session ${sessionId} not found`);
       }
 
-      // Create a temporary context that points to the specific session
-      const sessionContext = Object.create(context);
-      sessionContext.currentSessionId =
-        session.metadata?.bbSessionId || sessionId;
-      sessionContext.getStagehand = async () => session.stagehand;
-      sessionContext.getActivePage = async () => session.page;
-      sessionContext.getActiveBrowser = async () => session.browser;
+      // Create a session-specific context wrapper
+      const sessionContext = {
+        ...context,
+        // Override methods to use the specific session
+        getStagehand: async () => session.stagehand,
+        getActivePage: async () => session.page,
+        getActiveBrowser: async () => session.browser,
+        // Keep currentSessionId as read-only, returning the session's ID
+        get currentSessionId() {
+          return session.metadata?.bbSessionId || sessionId;
+        },
+      };
 
       // Call the original tool's handler with the session-specific context
-      return originalTool.handle(sessionContext, originalParams);
+      return originalTool.handle(sessionContext as Context, originalParams);
     },
   });
 }
